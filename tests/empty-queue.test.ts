@@ -1,0 +1,54 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { emptyQueueScenario } from '../src/simulation/empty-queue-scenario.ts';
+import { SimulationController } from '../src/simulation/controller.ts';
+import { emptyQueueExplanation } from '../src/lesson/empty-queue-presentation.ts';
+
+test('empty queue lesson blocks, wakes without receiving, then retries the same get exactly once', () => {
+  const controller = new SimulationController(emptyQueueScenario());
+  const blocked = controller.nextStep();
+  assert.equal(blocked.activeWorkerId, 'b');
+  assert.equal(blocked.workers[1].state, 'BLOCKED');
+  assert.equal(blocked.workers[1].instructionPointer, 0);
+  assert.deepEqual(blocked.workers[1].localVariables, {});
+  assert.equal(blocked.workers[0].state, 'READY');
+  assert.deepEqual(blocked.queues[0].waitingConsumers, ['b']);
+  assert.match(emptyQueueExplanation(blocked), /Producer is READY/);
+  const awake = controller.nextStep();
+  assert.equal(awake.activeWorkerId, 'a');
+  assert.equal(awake.workers[1].state, 'READY');
+  assert.equal(awake.workers[1].instructionPointer, 0);
+  assert.deepEqual(awake.workers[1].localVariables, {});
+  assert.deepEqual(awake.queues[0].items, ['package-a']);
+  assert.deepEqual(awake.queues[0].waitingConsumers, []);
+  assert.equal(awake.packages[0].currentOwner, 'jobs');
+  assert.match(emptyQueueExplanation(awake), /has not received anything yet/);
+  const received = controller.nextStep();
+  assert.equal(received.activeWorkerId, 'b');
+  assert.equal(received.workers[1].instructionPointer, 1);
+  assert.equal(received.workers[1].sourceLocation?.line, blocked.workers[1].sourceLocation?.line);
+  assert.equal(received.workers[1].localVariables.item, 'package-a');
+  assert.deepEqual(received.queues[0].items, []);
+  assert.equal(received.packages[0].currentOwner, 'b');
+  controller.nextStep();
+  const finished = controller.nextStep();
+  assert.equal(finished.status, 'FINISHED');
+  assert.equal(finished.events.filter(event => event.type === 'QUEUE_GET_REQUESTED').length, 2);
+  assert.equal(finished.events.filter(event => event.type === 'QUEUE_ITEM_REMOVED').length, 1);
+  assert.deepEqual(finished.events.filter(event => ['THREAD_BLOCKED', 'THREAD_UNBLOCKED', 'QUEUE_ITEM_REMOVED'].includes(event.type)).map(event => event.type), ['THREAD_BLOCKED', 'THREAD_UNBLOCKED', 'QUEUE_ITEM_REMOVED']);
+  assert.deepEqual(controller.nextStep(), finished);
+});
+
+test('empty queue reset clears blocked and awakened state and replays the same schedule', () => {
+  const controller = new SimulationController(emptyQueueScenario());
+  const initial = controller.snapshot();
+  const blocked = controller.nextStep();
+  assert.deepEqual(controller.reset(), initial);
+  assert.deepEqual(controller.nextStep(), blocked);
+  const awake = controller.nextStep();
+  assert.deepEqual(controller.reset(), initial);
+  controller.nextStep();
+  assert.deepEqual(controller.nextStep(), awake);
+  controller.nextStep(); controller.nextStep(); controller.nextStep();
+  assert.deepEqual(controller.reset(), initial);
+});
